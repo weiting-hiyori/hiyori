@@ -117,12 +117,12 @@ const BUILTIN_TPL=[
 ];
 
 /* ================= storage ================= */
-const COLS=['items','notes','projects','records','moments','templates','meta'];
+const COLS=['items','notes','projects','records','moments','templates','meta','posts'];
 const D={};COLS.forEach(c=>{D[c]={};});
 const S={tab:'home',day:today(),cal:today().slice(0,7),ready:false,qa:'',qn:'',ans:'',
   notes:{seg:'all',q:'',tag:''},
   lab:{view:'home',id:'',q:'',type:'',status:'',cell:'',ab:'',range:''},labHist:[],
-  album:{seg:'photo',month:today().slice(0,7)}};
+  album:{seg:'post',month:today().slice(0,7),tag:''}};
 
 const App={themeSet:false,t:0,dataChanged(ready){if(ready)S.ready=true;if(this.t)return;this.t=setTimeout(()=>{this.t=0;applyTheme();render();const s=SH.top();if(s&&s.live)paintSheet(true);},0);}};
 
@@ -144,9 +144,9 @@ function fileToImage(file){
   return new Promise((res,rej)=>{const url=URL.createObjectURL(file);const i=new Image();i.onload=()=>{res(i);setTimeout(()=>URL.revokeObjectURL(url),1500);};i.onerror=()=>{URL.revokeObjectURL(url);rej(new Error('讀不到這張圖片'));};i.src=url;});
 }
 function drawScaled(img,max){const w=img.naturalWidth||img.width,h=img.naturalHeight||img.height;const s=Math.min(1,max/Math.max(w,h));const c=document.createElement('canvas');c.width=Math.max(1,Math.round(w*s));c.height=Math.max(1,Math.round(h*s));c.getContext('2d').drawImage(img,0,0,c.width,c.height);return c;}
-async function addImages(files,onEach){
+async function addImages(files,onEach,folder){
   for(const f of files){
-    try{onEach(await storeImage(f));}
+    try{onEach(await storeImage(f,folder));}
     catch(e){const m=String(e&&e.message||'');toast(/size|large/i.test(m)?'照片太大了，換一張小一點的試試。':/quota|limit/i.test(m)?'照片空間已經滿了。':!navigator.onLine?'現在沒有網路，照片要連上網路才能上傳。':'這張照片沒有上傳成功。','bad');}
   }
 }
@@ -551,10 +551,11 @@ const Store={
     try{await this.loadAll();this.mode='cloud';}
     catch(e){console.warn(e);this.mode=cache?'offline':'error';toast(cache?'連不上雲端，先顯示這台裝置上次的資料。':'連不上雲端，請確認網路後重新打開。','bad');}
     this.subscribe();App.dataChanged(true);Push.init();scheduleReminderSync();
+    if(this.mode==='cloud'){Friends.loadMine();Friends.loadToMe();}
   },
   async loadAll(){
     const rows=[];let from=0;
-    for(;;){const {data,error}=await sb.from('docs').select('col,id,data').range(from,from+999);if(error)throw error;rows.push(...data);if(data.length<1000)break;from+=1000;}
+    for(;;){const {data,error}=await sb.from('docs').select('col,id,data').eq('user_id',this.uid).range(from,from+999);if(error)throw error;rows.push(...data);if(data.length<1000)break;from+=1000;}
     const fresh={};COLS.forEach(c=>{fresh[c]={};});
     rows.forEach(r=>{if(fresh[r.col])fresh[r.col][r.id]=r.data;});
     Object.values(this.outbox).forEach(o=>{if(!fresh[o.col])return;if(o.op==='put')fresh[o.col][o.id]=o.data;else delete fresh[o.col][o.id];});
@@ -597,7 +598,7 @@ const Store={
   },
   saveOutbox(){LS.set('hiyori.outbox',this.outbox);},
   saveCache(){clearTimeout(this._ct);this._ct=setTimeout(()=>{if(this.uid)LS.set('hiyori.cache.'+this.uid,D);},500);},
-  stop(){if(this.channel){try{sb.removeChannel(this.channel);}catch(e){}this.channel=null;}this.uid=null;this.mode='signedout';COLS.forEach(c=>{D[c]={};});S.ready=false;}
+  stop(){if(this.channel){try{sb.removeChannel(this.channel);}catch(e){}this.channel=null;}this.uid=null;this.mode='signedout';COLS.forEach(c=>{D[c]={};});S.ready=false;Friends.reset();}
 };
 window.addEventListener('online',()=>{Store._warned=false;Store.flush();scheduleReminderSync();});
 setInterval(()=>{if(navigator.onLine&&Object.keys(Store.outbox).length)Store.flush();},30000);
@@ -630,6 +631,7 @@ function authErr(e){
   if(/already registered|already been registered/i.test(m))return '這個 email 已經註冊過了，直接登入就好。';
   if(/rate limit|too many/i.test(m))return '試太多次了，等幾分鐘再試。';
   if(/Password should/i.test(m))return '密碼至少要 6 個字。';
+  if(/saving new user|allow list|not allowed/i.test(m))return '這個 email 不在小日和的允許名單裡，請先請網站主人把你加進去。';
   return m;
 }
 
@@ -643,10 +645,10 @@ const PhotoURL={map:LS.get('hiyori.photoUrls',{})||{},want:new Set(),t:0,
       const exp=Date.now()+7*864e5;(data||[]).forEach(r=>{if(r.signedUrl)this.map[r.path]={url:r.signedUrl,exp};});LS.set('hiyori.photoUrls',this.map);
       render();const s=SH.top();if(s)paintSheet(true);}catch(e){console.warn(e);}
   }};
-async function storeImage(file){
+async function storeImage(file,folder){
   const img=await fileToImage(file);const c=drawScaled(img,1800);
   const blob=await new Promise(r=>c.toBlob(r,'image/jpeg',.85));
-  const path=Store.uid+'/'+uid('p')+'.jpg';
+  const path=Store.uid+'/'+(folder?folder+'/':'')+uid('p')+'.jpg';
   const {error}=await sb.storage.from('photos').upload(path,blob,{contentType:'image/jpeg',upsert:false});
   if(error)throw error;
   PhotoURL.map[path]={url:URL.createObjectURL(blob),exp:Date.now()+3*3600e3};
@@ -756,6 +758,42 @@ async function syncReminders(){
   }catch(e){console.warn('reminder sync',e);}
 }
 
+/* ---------- 發表紀錄 sharing: who I share with, who shares with me ---------- */
+const Friends={
+  mine:null,toMe:null,posts:null,loading:false,
+  reset(){this.mine=null;this.toMe=null;this.posts=null;},
+  async loadMine(){
+    if(!sb||!Store.uid)return;
+    const {data,error}=await sb.from('shares').select('viewer_email,created_at').eq('owner',Store.uid).order('created_at');
+    if(!error){this.mine=data||[];App.dataChanged(true);}
+  },
+  async loadToMe(){
+    if(!sb||!Store.uid||!Store.email)return;
+    const {data,error}=await sb.from('shares').select('owner').eq('viewer_email',Store.email.toLowerCase());
+    if(!error){this.toMe=(data||[]).filter(r=>r.owner!==Store.uid);App.dataChanged(true);}
+  },
+  async loadPosts(){
+    if(!sb||!Store.uid||this.loading)return;this.loading=true;App.dataChanged(true);
+    const {data,error}=await sb.from('docs').select('user_id,id,data').eq('col','posts').neq('user_id',Store.uid).limit(500);
+    this.loading=false;
+    if(error){toast('朋友的發表沒有載入成功：'+error.message,'bad');App.dataChanged(true);return;}
+    this.posts=(data||[]).map(r=>Object.assign({},r.data,{owner:r.user_id}));App.dataChanged(true);
+  },
+  async add(email){
+    email=String(email||'').trim().toLowerCase();
+    if(!/^\S+@\S+\.\S+$/.test(email)){toast('請輸入正確的 email。','bad');return false;}
+    if(email===(Store.email||'').toLowerCase()){toast('這是你自己的 email 喔。','bad');return false;}
+    const {error}=await sb.from('shares').insert({owner:Store.uid,viewer_email:email});
+    if(error&&!/duplicate/i.test(error.message)){toast('沒有加成功：'+error.message,'bad');return false;}
+    await this.loadMine();toast('加進分享名單了','ok');return true;
+  },
+  async remove(email){
+    const {error}=await sb.from('shares').delete().match({owner:Store.uid,viewer_email:email});
+    if(error){toast('沒有移除成功：'+error.message,'bad');return;}
+    await this.loadMine();toast('已從分享名單移除');
+  }
+};
+
 /* ================= shared view helpers ================= */
 const TITLES={home:'首頁',today:'行程',notes:'筆記本',lab:'實驗紀錄',album:'生活小天地',shop:'我的'};
 const NAV_OF={home:'home',today:'today',notes:'notes',lab:'lab',album:'home',shop:'shop'};
@@ -817,7 +855,7 @@ function vHome(){
   const h=new Date().getHours();
   return `<section class="hero"><div class="hero-img" role="img" aria-label="Hiyori 招牌、窗邊的蛋糕與咖啡、睡在椅子上的小貓，遠方是湖和小鎮"></div></section>
   <div class="greet"><p class="hello">${esc(g1)}${name?'，'+esc(name):''}，${esc(g2)}</p><span class="hero-date">${dt.getMonth()+1} 月 ${dt.getDate()} 日 · 星期${WD[dow(t)]}</span></div>
-  <div class="linkcards">${linkcard('cake','study','今日行程',sub,`data-act="tab" data-tab="today" data-go="today"`)}${linkcard('sprout','lab','實驗紀錄',labSub,`data-act="tab" data-tab="lab"`)}</div>
+  <div class="linkcards">${linkcard('cake','study','今日行程',sub,`data-act="tab" data-tab="today" data-go="today"`)}${linkcard('sprout','lab','實驗紀錄',labSub,`data-act="tab" data-tab="lab"`)}${linkcard('pencil','rest','發表紀錄',postSub(),`data-act="tab" data-tab="album" data-seg="post"`)}</div>
   ${h>=18&&its.length?`<button class="btn btn-peach btn-block" data-act="review">${I('moon')}晚上回顧今天</button>`:''}
   <div class="tiles">${[['cake','study','行程管理','today'],['note','rest','筆記本','notes'],['flask','lab','實驗紀錄','lab'],['camera','friends','生活小天地','album']].map(([ic,c,l,tab])=>`<button class="paper tile" data-act="tab" data-tab="${tab}" data-go="today"><span class="plate lg c-${c}">${ICON(ic)}</span>${l}</button>`).join('')}</div>
   ${S.ready?ticketsBlock():''}
@@ -1003,10 +1041,15 @@ function vAlbum(){
   const ans=Object.values(D.moments).find(m=>m.kind==='answer'&&m.date===t);
   const ask=`<section class="ask"><span class="eyebrow">今日一問 · ${fmtDay(t)}</span><div class="ask-q">${esc(q)}</div>${ans?`<div class="ans">${esc(ans.text)}</div><div class="row"><span class="sp"></span><button class="btn btn-sm btn-line" data-act="momentOpen" data-id="${ans.id}">修改</button></div>`:`<form data-form="answer" style="display:flex;flex-direction:column;gap:8px"><label class="sr" for="ans">回答今日一問</label><textarea id="ans" data-model="ans" rows="2" placeholder="寫一兩句就好">${esc(S.ans)}</textarea><div class="row"><span class="sp"></span><button class="btn btn-sm btn-accent" type="submit">收進小天地</button></div></form>`}</section>`;
   const acts=`<div class="qa-acts"><button data-act="momentNew" data-kind="photo">${svgUse('camera2')}照片日記</button><button data-act="momentNew" data-kind="joy">${svgUse('heart2')}今日小確幸</button><button data-act="momentNew" data-kind="mood">${svgUse('flowers')}心情手帳</button></div>`;
-  const seg=`<div class="seg-scroll"><div class="seg">${[['photo','照片'],['joy','小確幸'],['mood','心情'],['past','時光回顧']].map(([k,l])=>`<button class="${A.seg===k?'on':''}" data-act="albumSeg" data-seg="${k}" aria-pressed="${A.seg===k}">${l}</button>`).join('')}</div></div>`;
+  const segs=[['post','發表'],['photo','照片'],['joy','小確幸'],['mood','心情'],['past','時光回顧']];
+  if(Friends.toMe&&Friends.toMe.length)segs.splice(1,0,['friends','朋友的發表']);
+  if(A.seg==='friends'&&!(Friends.toMe&&Friends.toMe.length))A.seg='post';
+  const seg=`<div class="seg-scroll"><div class="seg">${segs.map(([k,l])=>`<button class="${A.seg===k?'on':''}" data-act="albumSeg" data-seg="${k}" aria-pressed="${A.seg===k}">${l}</button>`).join('')}</div></div>`;
   let body='';const all=Object.values(D.moments);
   const byDate=(a,b)=>(a.date===b.date?(b.createdAt||0)-(a.createdAt||0):(a.date<b.date?1:-1));
   if(!S.ready)body=`<p class="loading-line">正在翻開相簿…</p>`;
+  else if(A.seg==='post')body=postFeed();
+  else if(A.seg==='friends')body=friendFeed();
   else if(A.seg==='photo'){
     const ms=all.filter(m=>m.kind==='photo'||(m.photos&&m.photos.length)).sort(byDate);
     body=ms.length?`<div class="pols">${ms.map(m=>{const ph=(m.photos||[])[0];const lines=String(m.text||'').split('\n');
@@ -1018,7 +1061,35 @@ function vAlbum(){
     const mm=all.filter(m=>m.date&&m.date.startsWith(A.month)&&(m.kind==='mood'||m.kind==='review'||m.kind==='answer')).sort(byDate);
     body=moodCal(A.month)+(mm.length?`<div class="slips">${mm.map(momentMini).join('')}</div>`:`<p class="muted small">這個月還沒有心情手帳。按上面的「心情手帳」選個心情天氣吧。</p>`);
   }else body=pastBlock();
+  if(A.seg==='post'||A.seg==='friends')return `<section class="block">${seg}${body}</section><p class="legal">發表預設只有你自己看得到；選「分享名單」的那幾篇，名單上的人登入後才看得到，而且只能看。</p>`;
   return ask+acts+`<section class="block">${seg}${body}</section><p class="legal">生活小天地預設只有你自己看得到。</p>`;
+}
+function postPhotos(ph){
+  if(!ph.length)return '';const n=ph.length;const show=ph.slice(0,n>4?4:n);
+  return `<span class="pgrid n${Math.min(n,4)}">${show.map((im,i)=>`<span class="pg"><img src="${esc(imgSrc(im))}" alt="" loading="lazy">${i===3&&n>4?`<b>+${n-4}</b>`:''}</span>`).join('')}</span>`;
+}
+function postCard(p,friend){
+  const lines=String(p.body||'').trim();const title=p.title||'';
+  return `<button class="post" data-act="${friend?'friendPostOpen':'postOpen'}" data-id="${esc(p.id)}"${friend?` data-o="${esc(p.owner)}"`:''}>
+    <span class="post-h"><span class="plate sm round c-${friend?'friends':'rest'}">${svgUse(friend?'cat-grey':'pencil')}</span><span style="min-width:0"><b>${esc(trim(title||lines.split('\n')[0]||'照片',26))}</b><small>${friend?esc(p.author||'朋友')+' · ':''}${esc((p.date||'').replace(/-/g,'/'))}${(p.tags||[]).length?' · '+esc(p.tags.join('、')):''}</small></span>${friend?'':`<span class="vis ${p.vis==='friends'?'on':''}">${p.vis==='friends'?'分享':'只有我'}</span>`}</span>
+    ${postPhotos(p.photos||[])}
+    ${(title?lines:lines.split('\n').slice(1).join('\n'))?`<span class="post-tx">${esc(title?lines:lines.split('\n').slice(1).join('\n'))}</span>`:''}
+  </button>`;
+}
+const postSort=(a,b)=>(a.date===b.date?(b.createdAt||0)-(a.createdAt||0):((a.date||'')<(b.date||'')?1:-1));
+function postFeed(){
+  const all=Object.values(D.posts).sort(postSort);const tag=S.album.tag;
+  const tags=[...new Set(POST_TAGS.concat(...all.map(p=>p.tags||[])))];
+  const list=tag?all.filter(p=>(p.tags||[]).includes(tag)):all;
+  const chips=`<div class="chips post-filter">${[['','全部']].concat(tags.map(t=>[t,t])).map(([v,l])=>`<button class="chip ${tag===v?'on':''}" data-act="postFilter" data-t="${esc(v)}" aria-pressed="${tag===v}">${esc(l)}</button>`).join('')}</div>`;
+  const write=`<button class="btn btn-accent btn-block" data-act="postNew">${I('edit')}寫一篇發表</button>`;
+  return write+chips+(list.length?`<div class="posts">${list.map(p=>postCard(p,false)).join('')}</div>`:emptyBox('pencil',tag?'這個分類還沒有發表':'還沒有發表','日常、奶蓋的照片、生活日誌，都可以寫成一篇收在這裡。','rest'));
+}
+function friendFeed(){
+  const ps=(Friends.posts||[]).slice().sort(postSort);
+  const head=`<div class="toolbar"><span class="small muted">朋友分享給你的發表（只能看）</span><span class="sp" style="flex:1"></span><button class="btn btn-sm btn-line" data-act="friendsReload">${I('repeat')}重新整理</button></div>`;
+  if(Friends.loading&&!Friends.posts)return head+`<p class="loading-line">正在載入朋友的發表…</p>`;
+  return head+(ps.length?`<div class="posts">${ps.map(p=>postCard(p,true)).join('')}</div>`:emptyBox('cat-grey','還沒有分享給你的發表','朋友選了「分享名單」的發表，會出現在這裡。','friends'));
 }
 function momentMini(m){
   const ph=(m.photos||[]).slice(0,3);const label={photo:'照片日記',joy:'小確幸',mood:'心情手帳',answer:'今日一問',review:'每日回顧'}[m.kind]||'回憶';
@@ -1053,6 +1124,15 @@ function memCard(month){
 }
 
 /* ================= 我的 ================= */
+function postSub(){const ps=Object.values(D.posts).sort(postSort);if(!ps.length)return '日常、奶蓋和生活日誌';const p=ps[0];return esc(trim(p.title||String(p.body||'').split('\n')[0]||'照片',14))+' · '+esc(fmtDay(p.date));}
+function shareBlock(){
+  const list=Friends.mine;
+  return `<section class="block" id="share"><div class="sec-head">${svgUse('heart2','hic')}<h2 class="h2">分享名單</h2><span class="eyebrow">${list?list.length+' 人':''}</span></div><div class="sec">
+    <p class="small">名單上的人用自己的 email 登入小日和後，只看得到你選「分享名單」的發表，不能改；你的行程、筆記、實驗紀錄和其他發表都看不到。</p>
+    ${list===null?'<p class="loading-line">載入中…</p>':list.length?`<div class="sync-list">${list.map(r=>`<div><span>${esc(r.viewer_email)}</span><button class="link-btn" data-act="shareRemove" data-e="${esc(r.viewer_email)}">移除</button></div>`).join('')}</div>`:'<p class="small muted">目前沒有分享給任何人。</p>'}
+    <form class="toolbar" data-form="share" novalidate style="flex-wrap:nowrap"><input class="in" type="email" inputmode="email" autocapitalize="off" placeholder="朋友的 email" aria-label="朋友的 email" style="flex:1;min-width:0"><button class="btn btn-sm btn-accent" type="submit">加入</button></form>
+    <p class="legal">加進名單的人也能用這個 email 註冊小日和。</p></div></section>`;
+}
 function pushBlock(ph){
   Push.env();const n=ph.pending.length+ph.synced.length;
   let body;
@@ -1094,6 +1174,7 @@ function vShop(){
   const unlockedN=FOODS.filter(f=>f.need<=total).length;const ph=phoneLists();
   return `<section class="shop-sign">${svgUse('cat-grey','cat')}<div><span class="t">${s.name?esc(s.name)+' 的小店':'我的小店'}</span><small>完成 ${total} 件事 · 印章 ${stamped.length} 格${streak>1?' · 連續 '+streak+' 天':''}</small></div></section>
 ${pushBlock(ph)}
+  ${shareBlock()}
   <section class="block"><div class="sec-head">${svgUse('star','hic')}<h2 class="h2">集點卡</h2><span class="eyebrow">Stamp card</span></div><div class="stampcard"><div class="top"><b>第 ${cardNo} 張</b><small>一天的事全部完成，就蓋一格</small></div><div class="slots">${slots}</div><div class="top"><small>累計 ${stamped.length} 格</small><small>一共完成 ${total} 件事</small></div></div></section>
   <section class="block"><div class="sec-head">${svgUse('book','hic')}<h2 class="h2">食物圖鑑</h2><span class="eyebrow">${unlockedN} / ${FOODS.length}</span></div><div class="zukan">${FOODS.map(f=>{const ok=f.need<=total;return `<div class="stk ${ok?'':'locked'}"><span class="plate c-${['study','lab','chores','friends','rest','habit'][FOODS.indexOf(f)%6]}">${F(f.id)}</span><b>${ok?f.name:'？？？'}</b><small>${ok?esc(f.desc):'完成 '+f.need+' 件解鎖'}</small></div>`;}).join('')}</div></section>
   <section class="block"><div class="sec-head">${svgUse('ticket','hic')}<h2 class="h2">分類圖示</h2></div><div class="paper" style="padding:4px 14px">${CAT_ORDER.map(c=>`<div class="catrow"><span class="plate sm c-${c}">${F(catFood(c))}</span><span>${CATS[c].name}</span><select data-change="catFood" data-c="${c}" aria-label="${CATS[c].name}的圖示">${FOODS.filter(f=>f.need<=total).map(f=>[f.id,f.name]).concat(CAT_EXTRA).map(([id,nm])=>`<option value="${id}" ${catFood(c)===id?'selected':''}>${nm}</option>`).join('')}</select></div>`).join('')}</div></section>
@@ -1244,9 +1325,9 @@ function pvCard(x,i,dr){
 }
 
 /* ================= notes ================= */
-function thumbsEditor(field,imgs){
+function thumbsEditor(field,imgs,folder){
   imgs=imgs||[];const up=SH.top()&&SH.top().uploading;
-  return `<div class="thumbs">${imgs.map((im,i)=>`<div class="thumb"><img src="${esc(imgSrc(im))}" alt=""><button type="button" class="row-del" data-act="imgDel" data-f="${field}" data-i="${i}" aria-label="移除圖片">${I('close')}</button></div>`).join('')}<label class="upload">${I('image')}<span>${up?'上傳中…':'加照片'}</span><input type="file" accept="image/*" multiple data-upload="${field}"></label></div>`;
+  return `<div class="thumbs">${imgs.map((im,i)=>`<div class="thumb"><img src="${esc(imgSrc(im))}" alt=""><button type="button" class="row-del" data-act="imgDel" data-f="${field}" data-i="${i}" aria-label="移除圖片">${I('close')}</button></div>`).join('')}<label class="upload">${I('image')}<span>${up?'上傳中…':'加照片'}</span><input type="file" accept="image/*" multiple data-upload="${field}"${folder?` data-folder="${folder}"`:''}></label></div>`;
 }
 function sheetNote(draft){
   const isNew=!D.notes[draft.id];draft.images=draft.images||[];draft.tagText=(draft.tags||[]).join(' ');
@@ -1349,6 +1430,38 @@ function sheetText(title,text){
   setTimeout(()=>{const t=$('#copybox');if(t){t.focus();t.select();}},60);
 }
 
+/* ================= 發表紀錄 ================= */
+const POST_TAGS=['日常','奶蓋','生活日誌'];
+function sheetPost(draft){
+  const isNew=!D.posts[draft.id];draft.photos=draft.photos||[];draft.tags=draft.tags||[];
+  const custom=draft.tags.filter(t=>!POST_TAGS.includes(t));draft.tags=draft.tags.filter(t=>POST_TAGS.includes(t));draft.extraTags=custom.join(' ');
+  SH.open({title:isNew?'寫一篇發表':'編輯發表',draft,full:true,isNew,
+    body(){const x=this.draft;const shareN=(Friends.mine||[]).length;
+      return `<div class="form">
+      <div class="field"><span class="lbl">分類</span><div class="chips">${POST_TAGS.map(t=>`<button type="button" class="chip ${x.tags.includes(t)?'on':''}" data-act="postTag" data-t="${esc(t)}" aria-pressed="${x.tags.includes(t)}">${esc(t)}</button>`).join('')}</div>
+        <input class="in" style="margin-top:8px" data-bind="extraTags" value="${esc(x.extraTags||'')}" placeholder="其他標籤（可不填，用空格分開）" aria-label="其他標籤"></div>
+      <div class="field"><label class="lbl" for="po-title">標題（可不填）</label><input type="text" id="po-title" data-bind="title" value="${esc(x.title||'')}" placeholder="例如：奶蓋今天第一次洗澡"></div>
+      <div class="field"><label class="lbl" for="po-body">內容</label><textarea id="po-body" data-bind="body" style="font-family:var(--f-hand);font-size:17px;min-height:160px" placeholder="今天發生了什麼？">${esc(x.body||'')}</textarea></div>
+      <div class="field"><span class="lbl">照片</span>${thumbsEditor('photos',x.photos,'posts')}</div>
+      <div class="field"><label class="lbl" for="po-date">日期</label><input type="date" id="po-date" data-bind="date" value="${esc(x.date||today())}"></div>
+      <div class="field"><span class="lbl">誰看得到</span><div class="seg">${[['me','只有我'],['friends','分享名單']].map(([v,l])=>`<button type="button" class="${x.vis===v?'on':''}" data-act="postVis" data-v="${v}" aria-pressed="${x.vis===v}">${l}</button>`).join('')}</div>
+        <p class="hint">${x.vis==='friends'?(shareN?`分享名單上的 ${shareN} 個人登入後看得到這篇（只能看，不能改）。`:'分享名單目前是空的，所以還是只有你看得到。要分享的話，到「我的 → 分享名單」加人。'):'只有你自己看得到。'}</p></div></div>`;},
+    foot(){return `${!this.isNew?`<button class="btn btn-danger btn-sm" data-act="postDelete">${I('trash')}刪除</button>`:''}<span class="sp"></span><button class="btn btn-line" data-act="sheetClose">取消</button><button class="btn btn-accent" data-act="postSave">${this.isNew?'發表':'儲存'}</button>`;}
+  });
+}
+function sheetPostView(p,friend){
+  SH.open({title:friend?((p.author||'朋友')+' 的發表'):'發表紀錄',pid:p.id,draft:null,full:true,
+    body(){const ph=p.photos||[];
+      return `<article class="post-full">
+        <div class="post-meta"><span>${esc((p.date||'').replace(/-/g,'/'))}</span>${(p.tags||[]).map(t=>`<span class="chip">${esc(t)}</span>`).join('')}${friend?'':`<span class="vis ${p.vis==='friends'?'on':''}">${p.vis==='friends'?'分享名單看得到':'只有我'}</span>`}</div>
+        ${p.title?`<h2 class="post-title">${esc(p.title)}</h2>`:''}
+        ${p.body?`<p class="post-body">${esc(p.body)}</p>`:''}
+        ${ph.length?`<div class="post-photos">${ph.map(im=>`<button type="button" data-act="lightbox" data-src="${esc(imgSrc(im))}" data-cap=""><img src="${esc(imgSrc(im))}" alt="" loading="lazy"></button>`).join('')}</div>`:''}
+      </article>`;},
+    foot(){return friend?`<span class="sp"></span><button class="btn btn-line" data-act="sheetClose">關閉</button>`:`<button class="btn btn-danger btn-sm" data-act="postDelete">${I('trash')}刪除</button><span class="sp"></span><button class="btn btn-accent" data-act="postEdit">${I('edit')}編輯</button>`;}
+  });
+}
+
 /* ================= album ================= */
 function sheetMoment(draft){
   const isNew=!D.moments[draft.id];draft.photos=draft.photos||[];
@@ -1448,7 +1561,7 @@ function noteConvert(kind){
 async function handleUpload(el){
   const s=SH.top();if(!s||!s.draft)return;const field=el.dataset.upload;const files=Array.from(el.files||[]);el.value='';if(!files.length)return;
   s.uploading=(s.uploading||0)+1;SH.repaint();
-  await addImages(files,im=>{let arr=getPath(s.draft,field);if(!Array.isArray(arr)){arr=[];setPath(s.draft,field,arr);}arr.push(el.dataset.cap?Object.assign(im,{caption:'',kind:'WB 膠片'}):im);s.dirty=true;if(SH.top()===s)SH.repaint();});
+  await addImages(files,im=>{let arr=getPath(s.draft,field);if(!Array.isArray(arr)){arr=[];setPath(s.draft,field,arr);}arr.push(el.dataset.cap?Object.assign(im,{caption:'',kind:'WB 膠片'}):im);s.dirty=true;if(SH.top()===s)SH.repaint();},el.dataset.folder);
   s.uploading--;if(SH.top()===s)SH.repaint();
 }
 function importJson(el){
@@ -1461,11 +1574,11 @@ function importJson(el){
   }).catch(()=>toast('讀不到這個檔案。','bad'));
 }
 const ACT={
-  tab(el){const t=el.dataset.tab;if(t==='lab'&&(S.tab==='lab'||S.tab==='home')){S.lab.view='home';S.labHist=[];}if(t==='today'&&(el.dataset.go==='today'||S.tab==='today'))setDay(today());goTab(t);},
+  tab(el){const t=el.dataset.tab;if(t==='album'&&el.dataset.seg)S.album.seg=el.dataset.seg;if(t==='lab'&&(S.tab==='lab'||S.tab==='home')){S.lab.view='home';S.labHist=[];}if(t==='today'&&(el.dataset.go==='today'||S.tab==='today'))setDay(today());goTab(t);},
   day(el){setDay(el.dataset.day);render();},
   goToday(){setDay(today());render();},
   calShift(el){S.cal=addMonths(S.cal+'-01',+el.dataset.n).slice(0,7);render();},
-  fab(){if(S.tab==='today')ACT.addItem({dataset:{kind:'event'}});else if(S.tab==='notes')ACT.newNote();else if(S.tab==='lab')sheetNewRec(S.lab.view==='proj'?{projectId:S.lab.id}:{});else if(S.tab==='album')ACT.momentNew({dataset:{kind:'photo'}});},
+  fab(){if(S.tab==='today')ACT.addItem({dataset:{kind:'event'}});else if(S.tab==='notes')ACT.newNote();else if(S.tab==='lab')sheetNewRec(S.lab.view==='proj'?{projectId:S.lab.id}:{});else if(S.tab==='album'){if(S.album.seg==='post'||S.album.seg==='friends')ACT.postNew();else ACT.momentNew({dataset:{kind:'photo'}});}},
   pushOn(){unlockAudio();Push.enable();App.dataChanged(true);},
   pushTest(){Push.test();},
   pushOff(){ask('關掉這台裝置的通知？之後在這台就不會收到提醒。','關掉',true).then(ok=>{if(ok)Push.disable();});},
@@ -1568,7 +1681,24 @@ const ACT={
   editProj(el){const p=D.projects[el.dataset.id];if(p)sheetProj(clone(p));},
   projSave(){const s=SH.top();const p=clone(s.draft);p.name=(p.name||'').trim();if(!p.name){toast('先幫專案取個名字。','bad');focusLater('#p-name');return;}const isNew=!D.projects[p.id];Store.put('projects',p);s.dirty=false;SH.close();if(isNew)openProj(p.id);toast('專案已儲存','ok');},
   projDelete(){const s=SH.top();const p=D.projects[s.draft.id];if(!p)return;ask('刪除專案「'+p.name+'」？裡面的實驗紀錄會留著，只是不再屬於這個專案。','刪除',true).then(ok=>{if(!ok)return;Store.del('projects',p.id);s.dirty=false;SH.clear();S.lab.view='home';S.labHist=[];render();toast('專案已刪除');});},
-  albumSeg(el){S.album.seg=el.dataset.seg;render();},
+  albumSeg(el){S.album.seg=el.dataset.seg;if(S.album.seg==='friends'&&!Friends.posts)Friends.loadPosts();render();},
+  postNew(){sheetPost({id:uid('po'),date:today(),title:'',body:'',photos:[],tags:[],vis:'me',createdAt:Date.now()});},
+  postOpen(el){const p=D.posts[el.dataset.id];if(p)sheetPostView(p,false);},
+  postEdit(){const s=SH.top();const p=s&&D.posts[s.pid];if(!p)return;SH.close();sheetPost(clone(p));},
+  postTag(el){const s=SH.top();const t=el.dataset.t;const tags=s.draft.tags||[];s.draft.tags=tags.includes(t)?tags.filter(x=>x!==t):tags.concat([t]);s.dirty=true;SH.repaint();},
+  postVis(el){const s=SH.top();s.draft.vis=el.dataset.v;s.dirty=true;SH.repaint();},
+  postFilter(el){S.album.tag=el.dataset.t||'';render();},
+  postSave(){const s=SH.top();const p=clone(s.draft);p.title=(p.title||'').trim();p.body=(p.body||'').trim();p.photos=p.photos||[];
+    const extra=String(s.draft.extraTags||'').split(/[\s,，、#]+/).map(x=>x.trim()).filter(Boolean);delete p.extraTags;
+    p.tags=[...new Set((p.tags||[]).concat(extra))];
+    if(!p.title&&!p.body&&!p.photos.length){toast('寫一句話或放張照片再發表喔。','bad');return;}
+    if(s.uploading){toast('照片還在上傳，等一下下。','bad');return;}
+    p.author=SET().name||'';p.date=p.date||today();const isNew=!D.posts[p.id];
+    Store.put('posts',p);s.dirty=false;SH.close();toast(isNew?(p.vis==='friends'?'發表了，分享名單上的人看得到':'發表了（只有你看得到）'):'已更新','ok');},
+  postDelete(){const s=SH.top();const p=D.posts[s.pid||s.draft&&s.draft.id];if(!p)return;ask('刪除這篇發表？','刪除',true).then(ok=>{if(!ok)return;const orig=clone(p);Store.del('posts',p.id);if(s)s.dirty=false;SH.clear();toast('已刪除','',{action:'復原',onAction:()=>Store.put('posts',orig)});});},
+  friendPostOpen(el){const p=(Friends.posts||[]).find(x=>x.id===el.dataset.id&&x.owner===el.dataset.o);if(p)sheetPostView(p,true);},
+  friendsReload(){Friends.loadPosts();},
+  shareRemove(el){const e=el.dataset.e;ask('把 '+e+' 從分享名單移除？之後他就看不到你分享的發表了。','移除',true).then(ok=>{if(ok)Friends.remove(e);});},
   momentNew(el){const k=el.dataset.kind||'photo';const d=el.dataset.day||today();sheetMoment({id:uid('m'),kind:k,date:d,text:'',photos:[],mood:0,createdAt:Date.now()});},
   momentOpen(el){const m=D.moments[el.dataset.id];if(m)sheetMoment(clone(m));},
   momentKind(el){const s=SH.top();s.draft.kind=el.dataset.k;s.dirty=true;SH.repaint();},
@@ -1593,6 +1723,7 @@ const CHG={
   catFood(el){saveSet({catFood:Object.assign({},SET().catFood,{[el.dataset.c]:el.value})});}
 };
 const FORM={
+  async share(f){const inp=f.querySelector('input');const v=inp?inp.value:'';const ok=await Friends.add(v);if(ok&&inp)inp.value='';},
   async auth(){
     const m=S.authMode||'in';const email=(S.authEmail||'').trim();const pw=S.authPw||'';
     S.authErr='';S.authMsg='';

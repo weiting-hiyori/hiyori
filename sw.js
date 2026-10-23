@@ -1,5 +1,5 @@
 /* 小日和 Hiyori — service worker: offline shell + push notifications */
-const V = 'hiyori-v2';
+const V = 'hiyori-v3';
 const CORE = ['./', './index.html', './app.js', './art.css', './config.js', './manifest.webmanifest',
   './icon-192.png', './apple-touch-icon.png'];
 
