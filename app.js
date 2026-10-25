@@ -38,7 +38,7 @@ const splitTags=t=>[...new Set(String(t||'').split(/[\s,，、#]+/).map(x=>x.tri
 const LS={get(k,def){try{const v=localStorage.getItem(k);return v==null?def:JSON.parse(v);}catch(e){return def;}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true;}catch(e){return false;}}};
 
 /* ================= constants ================= */
-const CATS={
+const CAT_BUILTIN={
   study:{name:'讀書、考試',short:'課業',food:'cake'},
   lab:{name:'實驗、研究',short:'實驗',food:'tube'},
   chores:{name:'日常雜事',short:'雜事',food:'croissant'},
@@ -46,7 +46,20 @@ const CATS={
   rest:{name:'休息、娛樂',short:'休息',food:'cupcake'},
   habit:{name:'固定習慣',short:'習慣',food:'latte'}
 };
-const CAT_ORDER=['study','lab','chores','friends','rest','habit'];
+const CAT_BUILTIN_ORDER=['study','lab','chores','friends','rest','habit'];
+/* categories are editable: built-ins can be renamed/recoloured, new ones added (stored in settings.catDefs) */
+const CAT_STORE={};const CAT_ORDER=[];
+const CATS=new Proxy(CAT_STORE,{get(t,k){if(typeof k!=='string'||k in t)return t[k];return t.chores||t[CAT_ORDER[0]];}});
+const CAT_TINTS=[['study','蜜桃粉'],['lab','抹茶綠'],['chores','奶茶色'],['friends','天空藍'],['rest','櫻花紫'],['habit','焦糖棕'],['mint','薄荷綠'],['lemon','檸檬黃'],['lilac','薰衣草']];
+function catDefsNow(){return CAT_ORDER.map(id=>({id,name:CAT_STORE[id].name,short:CAT_STORE[id].short,tint:CAT_STORE[id].tint,kw:CAT_STORE[id].kw||''}));}
+function rebuildCats(){
+  const defs=(D.meta.settings&&Array.isArray(D.meta.settings.catDefs)&&D.meta.settings.catDefs.length)?D.meta.settings.catDefs:CAT_BUILTIN_ORDER.map(id=>({id,name:CAT_BUILTIN[id].name,short:CAT_BUILTIN[id].short,tint:id,kw:''}));
+  Object.keys(CAT_STORE).forEach(k=>delete CAT_STORE[k]);CAT_ORDER.length=0;
+  defs.forEach(d=>{if(!d||!d.id||CAT_STORE[d.id])return;const b=CAT_BUILTIN[d.id];
+    CAT_STORE[d.id]={name:d.name||(b&&b.name)||'未命名',short:d.short||(d.name||'').slice(0,2)||(b&&b.short)||'分類',food:(b&&b.food)||'star',tint:CAT_TINTS.some(x=>x[0]===d.tint)?d.tint:(b?d.id:'mint'),kw:d.kw||''};CAT_ORDER.push(d.id);});
+  let st=document.getElementById('catcss');if(!st){st=document.createElement('style');st.id='catcss';document.head.appendChild(st);}
+  const css=CAT_ORDER.map(id=>`.c-${id}{--tint:var(--t-${CAT_STORE[id].tint})}`).join('');if(st.textContent!==css)st.textContent=css;
+}
 const FOODS=[
   {id:'cake',name:'草莓蛋糕',need:0,desc:'讀書、考試的好夥伴。'},
   {id:'latte',name:'貓咪拿鐵',need:0,desc:'每天固定的那一杯。'},
@@ -119,6 +132,7 @@ const BUILTIN_TPL=[
 /* ================= storage ================= */
 const COLS=['items','notes','projects','records','moments','templates','meta','posts'];
 const D={};COLS.forEach(c=>{D[c]={};});
+rebuildCats();
 const S={tab:'home',day:today(),cal:today().slice(0,7),ready:false,qa:'',qn:'',ans:'',
   notes:{seg:'all',q:'',tag:''},
   lab:{view:'home',id:'',q:'',type:'',status:'',cell:'',ab:'',range:''},labHist:[],
@@ -132,6 +146,7 @@ const DEF_SET={name:'',palette:'sage',theme:'system',catFood:{},unlocked:null,re
 const SET=()=>Object.assign({},DEF_SET,D.meta.settings||{});
 function saveSet(patch){const s=Object.assign(SET(),patch,{id:'settings'});Store.put('meta',s);applyTheme();}
 function applyTheme(){
+  rebuildCats();
   const s=SET(),r=document.documentElement;
   if(['peach','sky','latte'].includes(s.palette))r.setAttribute('data-palette',s.palette);else r.removeAttribute('data-palette');
   if(s.theme==='light'||s.theme==='dark'){r.setAttribute('data-theme',s.theme);App.themeSet=true;}
@@ -333,6 +348,12 @@ function matchDate(s,T){
 }
 function detectCat(t,rep){
   t=t||'';
+  const lc=t.toLowerCase();let best=null,bl=0;
+  CAT_ORDER.forEach(id=>String(CAT_STORE[id].kw||'').split(/[,，、\s]+/).map(x=>x.trim().toLowerCase()).filter(Boolean).forEach(k=>{if(lc.includes(k)&&k.length>bl){best=id;bl=k.length;}}));
+  if(best)return best;
+  const r=detectBuiltinCat(t,rep);return CAT_STORE[r]?r:(CAT_STORE.chores?'chores':CAT_ORDER[0]);
+}
+function detectBuiltinCat(t,rep){
   if(/考試|考试|期中|期末|小考|作業|上課/.test(t))return 'study';
   if(/實驗|实验|WB|western|blot|細胞|细胞|HCT|starv|stimul|培養|培养|PCR|抗體|抗体|轉染|lysate|蛋白|跑膠|\blab\b|passage|繼代|mTOR|shRNA|BCA|transfect|medium|culture|加藥|收樣|顯微鏡/i.test(t))return 'lab';
   if(/考試|考试|期中|期末|讀書|讀|唸|念書|報告|作業|上課|課|論文|paper|研究所|推甄|複習|老師|教授|IELTS|托福|多益|簡報|meeting|專題|小考|預習/i.test(t))return 'study';
@@ -1177,7 +1198,8 @@ ${pushBlock(ph)}
   ${shareBlock()}
   <section class="block"><div class="sec-head">${svgUse('star','hic')}<h2 class="h2">集點卡</h2><span class="eyebrow">Stamp card</span></div><div class="stampcard"><div class="top"><b>第 ${cardNo} 張</b><small>一天的事全部完成，就蓋一格</small></div><div class="slots">${slots}</div><div class="top"><small>累計 ${stamped.length} 格</small><small>一共完成 ${total} 件事</small></div></div></section>
   <section class="block"><div class="sec-head">${svgUse('book','hic')}<h2 class="h2">食物圖鑑</h2><span class="eyebrow">${unlockedN} / ${FOODS.length}</span></div><div class="zukan">${FOODS.map(f=>{const ok=f.need<=total;return `<div class="stk ${ok?'':'locked'}"><span class="plate c-${['study','lab','chores','friends','rest','habit'][FOODS.indexOf(f)%6]}">${F(f.id)}</span><b>${ok?f.name:'？？？'}</b><small>${ok?esc(f.desc):'完成 '+f.need+' 件解鎖'}</small></div>`;}).join('')}</div></section>
-  <section class="block"><div class="sec-head">${svgUse('ticket','hic')}<h2 class="h2">分類圖示</h2></div><div class="paper" style="padding:4px 14px">${CAT_ORDER.map(c=>`<div class="catrow"><span class="plate sm c-${c}">${F(catFood(c))}</span><span>${CATS[c].name}</span><select data-change="catFood" data-c="${c}" aria-label="${CATS[c].name}的圖示">${FOODS.filter(f=>f.need<=total).map(f=>[f.id,f.name]).concat(CAT_EXTRA).map(([id,nm])=>`<option value="${id}" ${catFood(c)===id?'selected':''}>${nm}</option>`).join('')}</select></div>`).join('')}</div></section>
+  <section class="block" id="cats"><div class="sec-head">${svgUse('ticket','hic')}<h2 class="h2">分類</h2><span class="eyebrow">${CAT_ORDER.length} 種</span></div><div class="paper" style="padding:4px 14px">${CAT_ORDER.map((c,i)=>`<div class="catrow" style="grid-template-columns:36px minmax(0,1fr) auto"><span class="plate sm c-${c}">${F(catFood(c))}</span><span style="min-width:0"><b style="display:block">${esc(CATS[c].name)}</b>${CATS[c].kw?`<small class="muted" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">自動分類：${esc(CATS[c].kw)}</small>`:''}</span><span style="display:flex;gap:6px">${i?`<button class="btn btn-sm btn-line" data-act="catUp" data-c="${c}" aria-label="把${esc(CATS[c].name)}往上移">↑</button>`:''}<button class="btn btn-sm btn-line" data-act="catEdit" data-c="${c}">編輯</button></span></div>`).join('')}<div style="padding:10px 0"><button class="btn btn-sm btn-accent" data-act="catNew">${I('plus')}新增分類</button></div></div>
+  <p class="legal">「自動分類」的字出現在一句話新增的句子裡，就會自動分到那一類。</p></section>
   <section class="block"><div class="sec-head">${svgUse('plant','hic')}<h2 class="h2">習慣統計</h2></div>
   ${sec('近七天',chart7(),'<span class="small muted">綠色是完成的件數</span>')}
   ${sec('近 30 天完成的事',catBars())}
@@ -1428,6 +1450,22 @@ function sheetTplName(r){
 function sheetText(title,text){
   SH.open({title:'複製這段文字',draft:{},body(){return `<p class="hint" style="margin-bottom:8px">${esc(title)}：長按下面的文字可以全選複製。</p><textarea class="in ta" id="copybox" readonly style="min-height:320px;font-family:ui-monospace,Menlo,monospace;font-size:13px">${esc(text)}</textarea>`;}});
   setTimeout(()=>{const t=$('#copybox');if(t){t.focus();t.select();}},60);
+}
+
+/* ================= 分類 ================= */
+function catIcons(){const total=completedTotal();return FOODS.filter(f=>f.need<=total).map(f=>[f.id,f.name]).concat(CAT_EXTRA);}
+function sheetCat(draft){
+  const isNew=!CAT_STORE[draft.id];
+  SH.open({title:isNew?'新增分類':'編輯分類',draft,isNew,full:true,
+    body(){const x=this.draft;
+      return `<div class="form">
+      <div class="field"><label class="lbl" for="ct-name">名稱</label><input type="text" id="ct-name" data-bind="name" value="${esc(x.name||'')}" placeholder="例如：上課"></div>
+      <div class="field"><label class="lbl" for="ct-short">簡稱（行程旁邊的小字，2～3 個字）</label><input type="text" id="ct-short" data-bind="short" value="${esc(x.short||'')}" maxlength="4" placeholder="例如：上課"></div>
+      <div class="field"><span class="lbl">圖示</span><div class="icon-pick">${catIcons().map(([id,nm])=>`<button type="button" class="${x.food===id?'on':''}" data-act="catIcon" data-f="${id}" aria-label="${esc(nm)}" aria-pressed="${x.food===id}"><span class="plate sm c-${esc(x.id)}" style="--tint:var(--t-${x.tint})">${F(id)}</span></button>`).join('')}</div></div>
+      <div class="field"><span class="lbl">顏色</span><div class="swatches">${CAT_TINTS.map(([k,l])=>`<button type="button" class="swatch ${x.tint===k?'on':''}" data-act="catTint" data-t="${k}"><i style="--sw:var(--t-${k})"></i>${l}</button>`).join('')}</div></div>
+      <div class="field"><label class="lbl" for="ct-kw">自動分類的關鍵字（可不填，用逗號分開）</label><input type="text" id="ct-kw" data-bind="kw" value="${esc(x.kw||'')}" placeholder="例如：上課, 課堂, 選修"><p class="hint">一句話新增時，句子裡有這些字，就會自動分到這一類。</p></div></div>`;},
+    foot(){return `${!this.isNew&&CAT_ORDER.length>1?`<button class="btn btn-danger btn-sm" data-act="catDelete">${I('trash')}刪除</button>`:''}<span class="sp"></span><button class="btn btn-line" data-act="sheetClose">取消</button><button class="btn btn-accent" data-act="catSave">儲存</button>`;}
+  });
 }
 
 /* ================= 發表紀錄 ================= */
@@ -1682,6 +1720,19 @@ const ACT={
   projSave(){const s=SH.top();const p=clone(s.draft);p.name=(p.name||'').trim();if(!p.name){toast('先幫專案取個名字。','bad');focusLater('#p-name');return;}const isNew=!D.projects[p.id];Store.put('projects',p);s.dirty=false;SH.close();if(isNew)openProj(p.id);toast('專案已儲存','ok');},
   projDelete(){const s=SH.top();const p=D.projects[s.draft.id];if(!p)return;ask('刪除專案「'+p.name+'」？裡面的實驗紀錄會留著，只是不再屬於這個專案。','刪除',true).then(ok=>{if(!ok)return;Store.del('projects',p.id);s.dirty=false;SH.clear();S.lab.view='home';S.labHist=[];render();toast('專案已刪除');});},
   albumSeg(el){S.album.seg=el.dataset.seg;if(S.album.seg==='friends'&&!Friends.posts)Friends.loadPosts();render();},
+  catNew(){sheetCat({id:uid('cat'),name:'',short:'',food:'pencil',tint:'mint',kw:''});},
+  catEdit(el){const c=el.dataset.c;const k=CAT_STORE[c];if(!k)return;sheetCat({id:c,name:k.name,short:k.short,food:catFood(c),tint:k.tint,kw:k.kw||''});},
+  catIcon(el){const s=SH.top();s.draft.food=el.dataset.f;s.dirty=true;SH.repaint();},
+  catTint(el){const s=SH.top();s.draft.tint=el.dataset.t;s.dirty=true;SH.repaint();},
+  catSave(){const s=SH.top();const x=s.draft;const name=(x.name||'').trim();if(!name){toast('先幫分類取個名字。','bad');focusLater('#ct-name');return;}
+    const defs=catDefsNow();const d={id:x.id,name,short:(x.short||'').trim()||name.slice(0,2),tint:x.tint,kw:(x.kw||'').trim()};
+    const i=defs.findIndex(v=>v.id===x.id);if(i>=0)defs[i]=d;else defs.push(d);
+    saveSet({catDefs:defs,catFood:Object.assign({},SET().catFood,{[x.id]:x.food})});s.dirty=false;SH.close();toast(i>=0?'分類已更新':'新增了「'+name+'」','ok');},
+  catDelete(){const s=SH.top();const id=s.draft.id;const k=CAT_STORE[id];if(!k)return;
+    const to=id!=='chores'&&CAT_STORE.chores?'chores':CAT_ORDER.find(c=>c!==id);const its=Object.values(D.items).filter(i=>i.cat===id);
+    ask('刪除分類「'+k.name+'」？'+(its.length?'裡面的 '+its.length+' 個行程會移到「'+CAT_STORE[to].name+'」。':''),'刪除',true).then(ok=>{if(!ok)return;
+      its.forEach(i=>{const x=clone(i);x.cat=to;Store.put('items',x);});saveSet({catDefs:catDefsNow().filter(d=>d.id!==id)});s.dirty=false;SH.close();toast('已刪除分類');});},
+  catUp(el){const defs=catDefsNow();const i=defs.findIndex(d=>d.id===el.dataset.c);if(i<1)return;[defs[i-1],defs[i]]=[defs[i],defs[i-1]];saveSet({catDefs:defs});},
   postNew(){sheetPost({id:uid('po'),date:today(),title:'',body:'',photos:[],tags:[],vis:'me',createdAt:Date.now()});},
   postOpen(el){const p=D.posts[el.dataset.id];if(p)sheetPostView(p,false);},
   postEdit(){const s=SH.top();const p=s&&D.posts[s.pid];if(!p)return;SH.close();sheetPost(clone(p));},

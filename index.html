@@ -593,6 +593,12 @@ body.authing main{padding-bottom:calc(40px + env(safe-area-inset-bottom,0px))}
 .auth-links{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 .steps-ol{margin:6px 0 0;padding-left:22px;font-size:14px;line-height:1.6;color:var(--ink-2);display:flex;flex-direction:column;gap:4px}
 .steps-ol svg{width:15px;height:15px;vertical-align:-2px}
+:root{--t-mint:#CFEBDD;--t-lemon:#F6E7B0;--t-lilac:#DCD3F0}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--t-mint:#5E8C78;--t-lemon:#9A8649;--t-lilac:#786E9A}}
+:root[data-theme="dark"]{--t-mint:#5E8C78;--t-lemon:#9A8649;--t-lilac:#786E9A}
+.icon-pick{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}
+.icon-pick button{padding:4px;border-radius:12px;border:1px solid var(--line);background:var(--card);display:flex;justify-content:center}
+.icon-pick button.on{border-color:var(--sage-btn);box-shadow:0 0 0 1px var(--sage-btn);background:var(--sage-soft)}
 /* 發表紀錄 */
 .post-filter{margin:10px 0 2px}
 .posts{display:flex;flex-direction:column;gap:14px;margin-top:10px}
